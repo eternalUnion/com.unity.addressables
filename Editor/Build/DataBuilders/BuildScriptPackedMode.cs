@@ -1087,7 +1087,7 @@ namespace UnityEditor.AddressableAssets.Build.DataBuilders
             var bundleInputDefs = new List<AssetBundleBuild>();
             var list = PrepGroupBundlePacking(assetGroup, bundleInputDefs, schema);
             aaContext.assetEntries.AddRange(list);
-            List<string> uniqueNames = HandleBundleNames(bundleInputDefs, aaContext.bundleToAssetGroup, assetGroup.Guid);
+            List<string> uniqueNames = HandleBundleNames(bundleInputDefs, aaContext.bundleToAssetGroup, schema, assetGroup);
             (string, string)[] groupBundles = new (string, string)[uniqueNames.Count];
             for (int i = 0; i < uniqueNames.Count; ++i)
                 groupBundles[i] = (bundleInputDefs[i].assetBundleName, uniqueNames[i]);
@@ -1096,33 +1096,103 @@ namespace UnityEditor.AddressableAssets.Build.DataBuilders
             return string.Empty;
         }
 
-        internal static List<string> HandleBundleNames(List<AssetBundleBuild> bundleInputDefs, Dictionary<string, string> bundleToAssetGroup = null, string assetGroupGuid = null)
+        internal static List<string> HandleBundleNames(List<AssetBundleBuild> bundleInputDefs, Dictionary<string, string> bundleToAssetGroup, BundledAssetGroupSchema schema, AddressableAssetGroup assetGroup)
         {
             var generatedUniqueNames = new List<string>();
             var handledNames = new HashSet<string>();
+            string assetGroupGuid = assetGroup.Guid;
 
-            for (int i = 0; i < bundleInputDefs.Count; i++)
+			for (int i = 0; i < bundleInputDefs.Count; i++)
             {
                 AssetBundleBuild bundleBuild = bundleInputDefs[i];
                 string assetBundleName = bundleBuild.assetBundleName;
-                if (handledNames.Contains(assetBundleName))
+
+                bool nameOverwritten = false;
+                if (assetGroup != null)
                 {
-                    int count = 1;
-                    var newName = assetBundleName;
-                    while (handledNames.Contains(newName) && count < 1000)
-                        newName = assetBundleName.Replace(".bundle", string.Format("{0}.bundle", count++));
-                    assetBundleName = newName;
+                    BundleNameOverwriteSchema nameOverwriteSchema = assetGroup.GetSchema<BundleNameOverwriteSchema>();
+				    if (nameOverwriteSchema != null)
+					{
+						switch (schema.BundleMode)
+                        {
+                            case BundledAssetGroupSchema.BundlePackingMode.PackTogether:
+								foreach (BundleDefinition bundle in nameOverwriteSchema.packedTogether)
+								{
+									if (assetGroupGuid + "_" + bundle.bundleName == assetBundleName)
+									{
+										bundleBuild.assetBundleName = bundle.bundleGuid;
+										nameOverwritten = true;
+										break;
+									}
+								}
+
+								if (!nameOverwritten)
+									Debug.LogWarning($"Name overwrite failed: {assetBundleName}");
+								break;
+
+                            case BundledAssetGroupSchema.BundlePackingMode.PackSeparately:
+                                foreach (BundleDefinition name in nameOverwriteSchema.packedSeparately)
+                                {
+                                    if (assetGroupGuid + "_" + name.bundleName == assetBundleName)
+                                    {
+                                        bundleBuild.assetBundleName = name.bundleGuid;
+									    nameOverwritten = true;
+                                        break;
+								    }
+                                }
+
+                                if (!nameOverwritten)
+                                    Debug.LogWarning($"Name overwrite failed: {assetBundleName}");
+                                break;
+
+                            case BundledAssetGroupSchema.BundlePackingMode.PackTogetherByLabel:
+							    foreach (BundleDefinition name in nameOverwriteSchema.packedByLabel)
+							    {
+								    if (assetGroupGuid + "_" + name.bundleName == assetBundleName)
+								    {
+									    bundleBuild.assetBundleName = name.bundleGuid;
+									    nameOverwritten = true;
+									    break;
+								    }
+							    }
+
+							    if (!nameOverwritten)
+								    Debug.LogWarning($"Name overwrite failed: {assetBundleName}");
+							    break;
+					    }
+				    }
                 }
 
-                string hashedAssetBundleName = HashingMethods.Calculate(assetBundleName) + ".bundle";
-                generatedUniqueNames.Add(assetBundleName);
-                handledNames.Add(assetBundleName);
+                if (nameOverwritten)
+                {
+					generatedUniqueNames.Add(assetBundleName);
+					handledNames.Add(assetBundleName);
 
-                bundleBuild.assetBundleName = hashedAssetBundleName;
+					if (bundleToAssetGroup != null)
+						bundleToAssetGroup.Add(bundleBuild.assetBundleName, assetGroupGuid);
+				}
+                else
+                {
+				    if (handledNames.Contains(assetBundleName))
+                    {
+                        int count = 1;
+                        var newName = assetBundleName;
+                        while (handledNames.Contains(newName) && count < 1000)
+                            newName = assetBundleName.Replace(".bundle", string.Format("{0}.bundle", count++));
+                        assetBundleName = newName;
+                    }
+
+                    string hashedAssetBundleName = HashingMethods.Calculate(assetBundleName) + ".bundle";
+                    generatedUniqueNames.Add(assetBundleName);
+                    handledNames.Add(assetBundleName);
+
+                    bundleBuild.assetBundleName = hashedAssetBundleName;
+
+                    if (bundleToAssetGroup != null)
+                        bundleToAssetGroup.Add(hashedAssetBundleName, assetGroupGuid);
+                }
+
                 bundleInputDefs[i] = bundleBuild;
-
-                if (bundleToAssetGroup != null)
-                    bundleToAssetGroup.Add(hashedAssetBundleName, assetGroupGuid);
             }
 
             return generatedUniqueNames;
